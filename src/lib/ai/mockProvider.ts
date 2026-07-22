@@ -1,10 +1,12 @@
 import type {
   AIProvider,
+  AnalysisAndCv,
   ExtractionResult,
   GenerationInput,
   GenerationResult,
   JobAdLanguage,
 } from "./types";
+import type { SourceOfTruth } from "@/lib/schemas";
 
 /**
  * Deterministic mock provider used for Day 1 and for local development without
@@ -63,6 +65,50 @@ export class MockProvider implements AIProvider {
     };
   }
 
+  /**
+   * Deterministic Stage 3-4 generation. The CV is assembled ONLY from the
+   * Source of Truth (nothing invented), following the Germany Market Pack
+   * section order; the analysis is derived from the extraction. Classification
+   * is a fixed "partial" because real judgement needs the live model.
+   */
+  async draftAnalysisAndCv(
+    input: GenerationInput,
+    extraction: ExtractionResult,
+  ): Promise<AnalysisAndCv> {
+    const de = input.outputLanguage === "de";
+    const sot = extraction.sourceOfTruth;
+    const job = extraction.parsedJobAd;
+
+    const confirmedStrengths = sot.workExperience
+      .map((w) => w.title)
+      .filter((t) => t.length > 0);
+    const missingOrUnconfirmed = job.requirements
+      .filter((r) => r.importance === "must")
+      .map((r) => r.text);
+
+    return {
+      matchAnalysis: {
+        classification: "partial",
+        jobTitle: job.jobTitle,
+        company: job.company,
+        confirmedStrengths,
+        partialMatches: [],
+        missingOrUnconfirmed,
+        germanMarketNotes: [
+          de
+            ? "(Mock) Germany Market Pack angewendet: formeller Ton, umgekehrt chronologische Struktur, einheitliches MM/JJJJ-Datumsformat."
+            : "(Mock) Germany Market Pack applied: formal tone, reverse-chronological structure, consistent MM/YYYY dates.",
+        ],
+        clarificationQuestions: [
+          de
+            ? "Bitte bestätigen oder ergänzen Sie diese Information."
+            : "Please confirm or provide this information.",
+        ],
+      },
+      cv: renderMockCv(sot, de),
+    };
+  }
+
   async generate(input: GenerationInput): Promise<GenerationResult> {
     const detectedJobAdLanguage = detectJobAdLanguage(input.jobAd);
     const de = input.outputLanguage === "de";
@@ -118,6 +164,74 @@ export class MockProvider implements AIProvider {
       },
     };
   }
+}
+
+/**
+ * Render a plain-text CV from the Source of Truth ONLY, in Germany Market Pack
+ * section order. Empty sections are shown as "(none provided)" rather than
+ * filled with invented content — Truth Lock applies even in the mock.
+ */
+function renderMockCv(sot: SourceOfTruth, de: boolean): string {
+  const none = de ? "(nicht angegeben)" : "(none provided)";
+  const L = de
+    ? {
+        header: "[MOCK LEBENSLAUF — DE]",
+        name: "(Name nicht angegeben)",
+        experience: "BERUFSERFAHRUNG",
+        skills: "KENNTNISSE",
+        languages: "SPRACHEN",
+        education: "AUSBILDUNG",
+      }
+    : {
+        header: "[MOCK CV — EN]",
+        name: "(name not provided)",
+        experience: "PROFESSIONAL EXPERIENCE",
+        skills: "SKILLS",
+        languages: "LANGUAGES",
+        education: "EDUCATION",
+      };
+
+  const lines: string[] = [L.header, ""];
+  lines.push(sot.personalInfo.name ?? L.name);
+  const contact = [sot.personalInfo.location, sot.personalInfo.email, sot.personalInfo.phone]
+    .filter((x): x is string => !!x)
+    .join(" · ");
+  if (contact) lines.push(contact);
+
+  lines.push("", L.experience);
+  if (sot.workExperience.length === 0) {
+    lines.push(`  ${none}`);
+  } else {
+    for (const w of sot.workExperience) {
+      const dates = [w.startDate, w.endDate].filter(Boolean).join(" – ");
+      const head = [w.title, w.employer, w.location].filter(Boolean).join(", ");
+      lines.push(`  ${head}${dates ? ` (${dates})` : ""}`);
+      for (const r of w.responsibilities) lines.push(`    - ${r}`);
+    }
+  }
+
+  lines.push("", L.skills, `  ${sot.skills.length ? sot.skills.join(", ") : none}`);
+  lines.push(
+    "",
+    L.languages,
+    `  ${
+      sot.languages.length
+        ? sot.languages.map((l) => (l.level ? `${l.language} (${l.level})` : l.language)).join(", ")
+        : none
+    }`,
+  );
+  lines.push("", L.education);
+  if (sot.education.length === 0) {
+    lines.push(`  ${none}`);
+  } else {
+    for (const e of sot.education) {
+      const dates = [e.startDate, e.endDate].filter(Boolean).join(" – ");
+      const head = [e.qualification, e.field, e.institution].filter(Boolean).join(", ");
+      lines.push(`  ${head}${dates ? ` (${dates})` : ""}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 /** First non-empty line of a block of text, trimmed and length-capped. */

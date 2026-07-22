@@ -1,11 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
   ExtractionResultSchema,
+  AnalysisAndCvSchema,
+  type AnalysisAndCv,
   type ExtractionResult,
   type JobAdLanguage,
   type MatchClassification,
 } from "@/lib/schemas";
 import { buildParseSourcesPrompt } from "@/lib/prompts/parseSources";
+import { buildAnalysisAndCvPrompt } from "@/lib/prompts/generateDocuments";
 import { extractJsonObject } from "./json";
 import type { AIProvider, GenerationInput, GenerationResult } from "./types";
 
@@ -37,6 +40,26 @@ export class ClaudeProvider implements AIProvider {
     if (!check.success) {
       throw new Error(
         `Claude extraction returned an invalid shape: ${check.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`,
+      );
+    }
+    return check.data;
+  }
+
+  /** Stage 3-4: Match Analysis + CV, constrained to the Source of Truth. */
+  async draftAnalysisAndCv(
+    input: GenerationInput,
+    extraction: ExtractionResult,
+  ): Promise<AnalysisAndCv> {
+    const { system, user } = buildAnalysisAndCvPrompt(input, extraction);
+    const raw = await this.callModelForText(system, user, 4096);
+    const parsed = extractJsonObject(raw);
+
+    const check = AnalysisAndCvSchema.safeParse(parsed);
+    if (!check.success) {
+      throw new Error(
+        `Claude generation returned an invalid shape: ${check.error.issues
           .map((i) => `${i.path.join(".")}: ${i.message}`)
           .join("; ")}`,
       );

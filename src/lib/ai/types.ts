@@ -15,6 +15,7 @@ export type {
   JobRequirement,
   ExtractionResult,
   MatchAnalysis,
+  AnalysisAndCv,
   GeneratedDocuments,
   TruthLockFlag,
   TruthLockReport,
@@ -22,7 +23,12 @@ export type {
   GenerationResult,
 } from "@/lib/schemas";
 
-import type { GenerationInput, GenerationResult, ExtractionResult } from "@/lib/schemas";
+import type {
+  GenerationInput,
+  GenerationResult,
+  ExtractionResult,
+  AnalysisAndCv,
+} from "@/lib/schemas";
 
 /**
  * The single contract every AI provider must satisfy. Swapping providers means
@@ -38,6 +44,16 @@ export interface AIProvider {
    * invented. Document generation is later constrained to this output.
    */
   parseSources(input: GenerationInput): Promise<ExtractionResult>;
+
+  /**
+   * Stage 3-4: from the extracted sources, produce the Match Analysis (strategy)
+   * and the tailored CV, constrained to the Source of Truth and the Germany
+   * Market Pack. The cover letter is a separate stage (Day 5).
+   */
+  draftAnalysisAndCv(
+    input: GenerationInput,
+    extraction: ExtractionResult,
+  ): Promise<AnalysisAndCv>;
 
   /** Full pipeline: produce the final structured result for the browser. */
   generate(input: GenerationInput): Promise<GenerationResult>;
