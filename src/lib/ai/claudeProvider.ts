@@ -1,19 +1,20 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type {
-  AIProvider,
-  GenerationInput,
-  GenerationResult,
-  JobAdLanguage,
-  MatchClassification,
-} from "./types";
+import {
+  ExtractionResultSchema,
+  type ExtractionResult,
+  type JobAdLanguage,
+  type MatchClassification,
+} from "@/lib/schemas";
+import { buildParseSourcesPrompt } from "@/lib/prompts/parseSources";
+import { extractJsonObject } from "./json";
+import type { AIProvider, GenerationInput, GenerationResult } from "./types";
 
 /**
  * Live provider backed by the Claude API.
  *
- * Day 1 scope: this proves the real round-trip and the same `AIProvider`
- * contract as the mock. It asks Claude for a single structured JSON object.
- * The full multi-stage pipeline + Truth Lock (Days 3-6) will expand this file
- * ONLY — the rest of the app is insulated by the `AIProvider` interface.
+ * Same `AIProvider` contract as the mock. The rest of the app is insulated by
+ * that interface, so expanding this file (Days 3-6) never touches the app.
+ * Day 3 adds the real Stage 1-2 extraction (`parseSources`).
  */
 export class ClaudeProvider implements AIProvider {
   readonly name = "claude";
@@ -24,6 +25,23 @@ export class ClaudeProvider implements AIProvider {
   constructor(apiKey: string, model?: string) {
     this.client = new Anthropic({ apiKey });
     this.model = model || "claude-sonnet-5";
+  }
+
+  /** Stage 1-2: extract Source of Truth + parsed job ad, validated by schema. */
+  async parseSources(input: GenerationInput): Promise<ExtractionResult> {
+    const { system, user } = buildParseSourcesPrompt(input);
+    const raw = await this.callModelForText(system, user, 4096);
+    const parsed = extractJsonObject(raw);
+
+    const check = ExtractionResultSchema.safeParse(parsed);
+    if (!check.success) {
+      throw new Error(
+        `Claude extraction returned an invalid shape: ${check.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`,
+      );
+    }
+    return check.data;
   }
 
   async generate(input: GenerationInput): Promise<GenerationResult> {
@@ -66,20 +84,8 @@ export class ClaudeProvider implements AIProvider {
       input.jobAd,
     ].join("\n");
 
-    const message = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 4096,
-      system,
-      messages: [{ role: "user", content: user }],
-    });
-
-    const raw = message.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("")
-      .trim();
-
-    const parsed = parseModelJson(raw);
+    const raw = await this.callModelForText(system, user, 4096);
+    const parsed = extractJsonObject(raw) as any;
 
     return {
       matchAnalysis: {
@@ -101,27 +107,28 @@ export class ClaudeProvider implements AIProvider {
       },
     };
   }
-}
 
-// --- tolerant parsing helpers (the model output is untrusted structurally) ---
-
-function parseModelJson(raw: string): any {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    // Fall back to the first {...} block if the model added stray text.
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-    if (start !== -1 && end > start) {
-      try {
-        return JSON.parse(raw.slice(start, end + 1));
-      } catch {
-        /* ignore */
-      }
-    }
-    return {};
+  /** Single Messages API round-trip that returns concatenated text blocks. */
+  private async callModelForText(
+    system: string,
+    user: string,
+    maxTokens: number,
+  ): Promise<string> {
+    const message = await this.client.messages.create({
+      model: this.model,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: user }],
+    });
+    return message.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join("")
+      .trim();
   }
 }
+
+// --- tolerant coercion helpers (model output is untrusted structurally) ------
 
 function coerceClassification(v: unknown): MatchClassification {
   return v === "strong" || v === "partial" || v === "gaps" ? v : "partial";

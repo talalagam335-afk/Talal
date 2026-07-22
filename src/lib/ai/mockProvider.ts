@@ -1,5 +1,6 @@
 import type {
   AIProvider,
+  ExtractionResult,
   GenerationInput,
   GenerationResult,
   JobAdLanguage,
@@ -17,6 +18,50 @@ import type {
  */
 export class MockProvider implements AIProvider {
   readonly name = "mock";
+
+  /**
+   * Deterministic Stage 1-2 extraction. It does NOT fabricate structured facts
+   * (that would violate Truth Lock, even in a mock): personal info, education,
+   * skills, and languages come back empty because the mock does not parse them.
+   * It only echoes the first line of each input as a single, clearly-derived
+   * placeholder so the shape is exercised and tests are reproducible.
+   */
+  async parseSources(input: GenerationInput): Promise<ExtractionResult> {
+    const expLine = firstLine(input.experience);
+    const jobLine = firstLine(input.jobAd);
+    const language = detectJobAdLanguage(input.jobAd);
+
+    return {
+      sourceOfTruth: {
+        personalInfo: { name: null, email: null, phone: null, location: null },
+        workExperience: expLine
+          ? [
+              {
+                title: expLine,
+                employer: null,
+                location: null,
+                startDate: null,
+                endDate: null,
+                responsibilities: [],
+                achievements: [],
+              },
+            ]
+          : [],
+        education: [],
+        skills: [],
+        languages: [],
+        certificates: [],
+      },
+      parsedJobAd: {
+        jobTitle: null,
+        company: null,
+        location: null,
+        language,
+        requirements: jobLine ? [{ text: jobLine, importance: "must" }] : [],
+        responsibilities: [],
+      },
+    };
+  }
 
   async generate(input: GenerationInput): Promise<GenerationResult> {
     const detectedJobAdLanguage = detectJobAdLanguage(input.jobAd);

@@ -13,6 +13,7 @@ export type {
   SourceOfTruth,
   ParsedJobAd,
   JobRequirement,
+  ExtractionResult,
   MatchAnalysis,
   GeneratedDocuments,
   TruthLockFlag,
@@ -21,7 +22,7 @@ export type {
   GenerationResult,
 } from "@/lib/schemas";
 
-import type { GenerationInput, GenerationResult } from "@/lib/schemas";
+import type { GenerationInput, GenerationResult, ExtractionResult } from "@/lib/schemas";
 
 /**
  * The single contract every AI provider must satisfy. Swapping providers means
@@ -30,5 +31,14 @@ import type { GenerationInput, GenerationResult } from "@/lib/schemas";
 export interface AIProvider {
   /** Stable identifier, surfaced in result meta for debugging. */
   readonly name: string;
+
+  /**
+   * Stage 1-2: read the experience + job ad into a structured ExtractionResult
+   * (Source of Truth + parsed job ad). Truthful extraction only — nothing is
+   * invented. Document generation is later constrained to this output.
+   */
+  parseSources(input: GenerationInput): Promise<ExtractionResult>;
+
+  /** Full pipeline: produce the final structured result for the browser. */
   generate(input: GenerationInput): Promise<GenerationResult>;
 }

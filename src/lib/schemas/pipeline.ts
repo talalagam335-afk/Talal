@@ -102,6 +102,22 @@ export const ParsedJobAdSchema = z.object({
 });
 export type ParsedJobAd = z.infer<typeof ParsedJobAdSchema>;
 
+// --- Stages 1-2 combined: extraction result ---------------------------------
+// The output of the extraction pass — the Source of Truth plus the parsed job
+// advertisement. This is the "read the inputs" half of the pipeline and is
+// tested in isolation before any document is generated.
+
+export const ExtractionResultSchema = z.object({
+  sourceOfTruth: SourceOfTruthSchema,
+  parsedJobAd: ParsedJobAdSchema,
+});
+export type ExtractionResult = z.infer<typeof ExtractionResultSchema>;
+
+/** Safe-parse an unknown value (e.g. AI output) as an ExtractionResult. */
+export function parseExtractionResult(data: unknown) {
+  return ExtractionResultSchema.safeParse(data);
+}
+
 // --- Stage 3: Match analysis (Screen 3, tab 1) ------------------------------
 // NOTE: shape is kept identical to the Day 1 contract so existing providers
 // remain valid without changes.
