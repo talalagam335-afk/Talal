@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAIProvider, type GenerationInput, type OutputLanguage } from "@/lib/ai";
+import { GenerationResultSchema } from "@/lib/schemas";
 import { LIMITS } from "@/lib/server/limits";
 
 // The single secure server-side generation endpoint.
@@ -29,7 +30,19 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const provider = getAIProvider();
     const result = await provider.generate(validation.input);
-    return NextResponse.json(result, { status: 200 });
+
+    // Validate the provider's structured output before returning it. This
+    // guards against malformed AI JSON (relevant once the live provider runs).
+    const checked = GenerationResultSchema.safeParse(result);
+    if (!checked.success) {
+      console.error("[/api/generate] invalid provider output:", checked.error.issues);
+      return NextResponse.json(
+        { error: "Generation produced an unexpected result. Please try again." },
+        { status: 502 },
+      );
+    }
+
+    return NextResponse.json(checked.data, { status: 200 });
   } catch (err) {
     // Basic error handling (scope §10). Never leak internals/keys to client.
     console.error("[/api/generate] provider error:", err);
