@@ -28,6 +28,9 @@ import type {
   GenerationResult,
   ExtractionResult,
   AnalysisAndCv,
+  SourceOfTruth,
+  GeneratedDocuments,
+  TruthLockReport,
 } from "@/lib/schemas";
 
 /**
@@ -63,6 +66,17 @@ export interface AIProvider {
     input: GenerationInput,
     extraction: ExtractionResult,
   ): Promise<string>;
+
+  /**
+   * Stage 6 (Layer B): independent semantic Truth Lock validation. Given the
+   * Source of Truth and the generated documents, return unsupported claims.
+   * The deterministic numeric guardrail (Layer C) runs separately in the
+   * orchestrator and is merged with this result.
+   */
+  validateTruth(
+    sourceOfTruth: SourceOfTruth,
+    documents: GeneratedDocuments,
+  ): Promise<TruthLockReport>;
 
   /** Full pipeline: produce the final structured result for the browser. */
   generate(input: GenerationInput): Promise<GenerationResult>;

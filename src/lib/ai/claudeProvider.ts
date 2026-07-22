@@ -3,14 +3,19 @@ import {
   ExtractionResultSchema,
   AnalysisAndCvSchema,
   CoverLetterSchema,
+  TruthLockReportSchema,
   type AnalysisAndCv,
   type ExtractionResult,
+  type GeneratedDocuments,
+  type SourceOfTruth,
+  type TruthLockReport,
 } from "@/lib/schemas";
 import { buildParseSourcesPrompt } from "@/lib/prompts/parseSources";
 import {
   buildAnalysisAndCvPrompt,
   buildCoverLetterPrompt,
 } from "@/lib/prompts/generateDocuments";
+import { buildTruthLockPrompt } from "@/lib/prompts/truthLock";
 import { extractJsonObject } from "./json";
 import { runPipeline } from "./orchestrator";
 import type { AIProvider, GenerationInput, GenerationResult } from "./types";
@@ -77,6 +82,22 @@ export class ClaudeProvider implements AIProvider {
       throw new Error(schemaError("cover letter", check.error.issues));
     }
     return check.data.coverLetter;
+  }
+
+  /** Stage 6 (Layer B): independent semantic Truth Lock validation. */
+  async validateTruth(
+    sourceOfTruth: SourceOfTruth,
+    documents: GeneratedDocuments,
+  ): Promise<TruthLockReport> {
+    const { system, user } = buildTruthLockPrompt(sourceOfTruth, documents);
+    const raw = await this.callModelForText(system, user, 2048);
+    const parsed = extractJsonObject(raw);
+
+    const check = TruthLockReportSchema.safeParse(parsed);
+    if (!check.success) {
+      throw new Error(schemaError("Truth Lock validation", check.error.issues));
+    }
+    return check.data;
   }
 
   /** Full pipeline via the shared orchestrator. */

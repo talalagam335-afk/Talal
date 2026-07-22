@@ -6,7 +6,12 @@ import type {
   GenerationResult,
   JobAdLanguage,
 } from "./types";
-import type { ParsedJobAd, SourceOfTruth } from "@/lib/schemas";
+import type {
+  GeneratedDocuments,
+  ParsedJobAd,
+  SourceOfTruth,
+  TruthLockReport,
+} from "@/lib/schemas";
 import { runPipeline } from "./orchestrator";
 
 /**
@@ -124,6 +129,19 @@ export class MockProvider implements AIProvider {
       extraction.parsedJobAd,
       input.outputLanguage === "de",
     );
+  }
+
+  /**
+   * Stage 6 (Layer B), mock: the mock has no semantic model, and its generated
+   * documents use only Source-of-Truth facts, so the semantic layer reports
+   * nothing. The deterministic numeric guardrail (Layer C) still runs in the
+   * orchestrator and can still raise flags.
+   */
+  async validateTruth(
+    _sourceOfTruth: SourceOfTruth,
+    _documents: GeneratedDocuments,
+  ): Promise<TruthLockReport> {
+    return { passed: true, flags: [] };
   }
 
   /** Full pipeline via the shared orchestrator (extract -> analyse+CV -> letter). */

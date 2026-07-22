@@ -1,10 +1,16 @@
-import type { GenerationInput, GenerationResult } from "@/lib/schemas";
+import type {
+  GeneratedDocuments,
+  GenerationInput,
+  GenerationResult,
+  SourceOfTruth,
+  TruthLockReport,
+} from "@/lib/schemas";
 import type { AIProvider } from "./types";
+import { runNumericGuardrail } from "./truthLock";
 
 // Shared pipeline orchestrator. Composes a provider's stage methods into the
 // final GenerationResult, so the ordering/assembly logic lives in ONE place and
-// every provider's generate() delegates here. Day 6 inserts Truth Lock
-// validation between generation and assembly.
+// every provider's generate() delegates here.
 
 export async function runPipeline(
   provider: AIProvider,
@@ -19,15 +25,32 @@ export async function runPipeline(
   // Stage 5: cover letter, same Truth Lock constraint.
   const coverLetter = await provider.writeCoverLetter(input, extraction);
 
-  // Stage 7: assemble the structured result. (Stage 6, Truth Lock, is Day 6.)
+  // Stage 6: Truth Lock — deterministic numeric guardrail (Layer C, always on)
+  // merged with the provider's independent semantic validator (Layer B).
+  const documents: GeneratedDocuments = { cv, coverLetter };
+  const truthLock = await runTruthLock(provider, extraction.sourceOfTruth, documents);
+
+  // Stage 7: assemble the structured result.
   return {
     matchAnalysis,
     cv,
     coverLetter,
+    truthLock,
     meta: {
       provider: provider.name,
       outputLanguage: input.outputLanguage,
       detectedJobAdLanguage: extraction.parsedJobAd.language,
     },
   };
+}
+
+async function runTruthLock(
+  provider: AIProvider,
+  sourceOfTruth: SourceOfTruth,
+  documents: GeneratedDocuments,
+): Promise<TruthLockReport> {
+  const layerC = runNumericGuardrail(sourceOfTruth, documents); // deterministic
+  const layerB = await provider.validateTruth(sourceOfTruth, documents); // semantic
+  const flags = [...layerB.flags, ...layerC];
+  return { passed: flags.length === 0, flags };
 }
