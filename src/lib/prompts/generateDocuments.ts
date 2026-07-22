@@ -68,3 +68,50 @@ export function buildAnalysisAndCvPrompt(
 
   return { system, user };
 }
+
+// Stage 5 prompt: the tailored cover letter. Same Truth Lock constraint — only
+// Source-of-Truth facts — plus the Germany Market Pack cover-letter rules
+// (one page, formal, no invented recipient, no invented company knowledge).
+
+export function buildCoverLetterPrompt(
+  input: GenerationInput,
+  extraction: ExtractionResult,
+): PromptParts {
+  const outputLangName = input.outputLanguage === "de" ? "German" : "English";
+  const pack = renderGermanyMarketPackRules(GERMANY_MARKET_PACK_V0);
+
+  const system = [
+    "You are NextMove's cover-letter stage for the German job market.",
+    "You write ONE concise, professional cover letter in " + outputLangName + ".",
+    "",
+    "TRUTH LOCK (absolute): use ONLY facts from the provided SOURCE OF TRUTH JSON.",
+    "Never invent experience, employers, skills, achievements, or qualifications,",
+    "and never claim knowledge about the company that is not given. Connect the",
+    "user's real experience to the job's requirements honestly.",
+    "",
+    "Do NOT invent a recipient name. If the recipient is unknown, clearly mark it",
+    "as missing (e.g. a bracketed placeholder) instead of making one up. Likewise",
+    "mark any other missing contact detail rather than fabricating it.",
+    "",
+    pack,
+    "",
+    "Respond with ONLY a single JSON object. No prose, no markdown fences.",
+  ].join("\n");
+
+  const user = [
+    `Output language: ${outputLangName}.`,
+    "",
+    'Return JSON with EXACTLY this shape: { "coverLetter": string }',
+    "",
+    "The cover letter must be one page, formal, concise, avoid generic",
+    "motivational clichés, and connect real experience to the job requirements.",
+    "",
+    "=== SOURCE OF TRUTH (the only facts you may use) ===",
+    JSON.stringify(extraction.sourceOfTruth, null, 2),
+    "",
+    "=== PARSED JOB ADVERTISEMENT ===",
+    JSON.stringify(extraction.parsedJobAd, null, 2),
+  ].join("\n");
+
+  return { system, user };
+}

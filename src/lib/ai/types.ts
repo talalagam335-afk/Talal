@@ -55,6 +55,15 @@ export interface AIProvider {
     extraction: ExtractionResult,
   ): Promise<AnalysisAndCv>;
 
+  /**
+   * Stage 5: from the extracted sources, produce the tailored cover letter,
+   * constrained to the Source of Truth. Returns the letter text.
+   */
+  writeCoverLetter(
+    input: GenerationInput,
+    extraction: ExtractionResult,
+  ): Promise<string>;
+
   /** Full pipeline: produce the final structured result for the browser. */
   generate(input: GenerationInput): Promise<GenerationResult>;
 }

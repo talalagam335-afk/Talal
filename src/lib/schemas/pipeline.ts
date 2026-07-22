@@ -160,6 +160,20 @@ export function parseAnalysisAndCv(data: unknown) {
   return AnalysisAndCvSchema.safeParse(data);
 }
 
+// --- Stage 5 output: cover letter -------------------------------------------
+// The cover letter is a single string, wrapped in an object so the model can
+// return validated JSON like the other stages.
+
+export const CoverLetterSchema = z.object({
+  coverLetter: z.string(),
+});
+export type CoverLetterResult = z.infer<typeof CoverLetterSchema>;
+
+/** Safe-parse an unknown value (e.g. AI output) as a CoverLetterResult. */
+export function parseCoverLetter(data: unknown) {
+  return CoverLetterSchema.safeParse(data);
+}
+
 // --- Stage 6: Truth Lock validation report ----------------------------------
 
 export const TruthLockFlagSchema = z.object({

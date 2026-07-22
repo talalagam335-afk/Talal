@@ -2,22 +2,26 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   ExtractionResultSchema,
   AnalysisAndCvSchema,
+  CoverLetterSchema,
   type AnalysisAndCv,
   type ExtractionResult,
-  type JobAdLanguage,
-  type MatchClassification,
 } from "@/lib/schemas";
 import { buildParseSourcesPrompt } from "@/lib/prompts/parseSources";
-import { buildAnalysisAndCvPrompt } from "@/lib/prompts/generateDocuments";
+import {
+  buildAnalysisAndCvPrompt,
+  buildCoverLetterPrompt,
+} from "@/lib/prompts/generateDocuments";
 import { extractJsonObject } from "./json";
+import { runPipeline } from "./orchestrator";
 import type { AIProvider, GenerationInput, GenerationResult } from "./types";
 
 /**
  * Live provider backed by the Claude API.
  *
  * Same `AIProvider` contract as the mock. The rest of the app is insulated by
- * that interface, so expanding this file (Days 3-6) never touches the app.
- * Day 3 adds the real Stage 1-2 extraction (`parseSources`).
+ * that interface, so expanding this file never touches the app. Each stage is a
+ * schema-validated Messages round-trip; generate() delegates to the shared
+ * orchestrator (extract -> analyse+CV -> cover letter).
  */
 export class ClaudeProvider implements AIProvider {
   readonly name = "claude";
@@ -38,11 +42,7 @@ export class ClaudeProvider implements AIProvider {
 
     const check = ExtractionResultSchema.safeParse(parsed);
     if (!check.success) {
-      throw new Error(
-        `Claude extraction returned an invalid shape: ${check.error.issues
-          .map((i) => `${i.path.join(".")}: ${i.message}`)
-          .join("; ")}`,
-      );
+      throw new Error(schemaError("extraction", check.error.issues));
     }
     return check.data;
   }
@@ -58,77 +58,30 @@ export class ClaudeProvider implements AIProvider {
 
     const check = AnalysisAndCvSchema.safeParse(parsed);
     if (!check.success) {
-      throw new Error(
-        `Claude generation returned an invalid shape: ${check.error.issues
-          .map((i) => `${i.path.join(".")}: ${i.message}`)
-          .join("; ")}`,
-      );
+      throw new Error(schemaError("generation", check.error.issues));
     }
     return check.data;
   }
 
+  /** Stage 5: cover letter, constrained to the Source of Truth. */
+  async writeCoverLetter(
+    input: GenerationInput,
+    extraction: ExtractionResult,
+  ): Promise<string> {
+    const { system, user } = buildCoverLetterPrompt(input, extraction);
+    const raw = await this.callModelForText(system, user, 2048);
+    const parsed = extractJsonObject(raw);
+
+    const check = CoverLetterSchema.safeParse(parsed);
+    if (!check.success) {
+      throw new Error(schemaError("cover letter", check.error.issues));
+    }
+    return check.data.coverLetter;
+  }
+
+  /** Full pipeline via the shared orchestrator. */
   async generate(input: GenerationInput): Promise<GenerationResult> {
-    const outputLangName = input.outputLanguage === "de" ? "German" : "English";
-
-    const system = [
-      "You are NextMove, a truthful job-application assistant for the German job market.",
-      "Absolute rule (Truth Lock): never invent experience, employers, education, skills,",
-      "certificates, achievements, dates, languages, or personal information. Only use facts",
-      "present in the user's experience text. If a job requirement is not supported by the",
-      "user's experience, list it under missing/unconfirmed — never assert it as fact.",
-      "Respond with ONLY a single JSON object, no prose, no markdown fences.",
-    ].join(" ");
-
-    const user = [
-      `Output language for the CV and cover letter: ${outputLangName}.`,
-      "Auto-detect whether the job advertisement is written in German or English.",
-      "",
-      "Return JSON with exactly this shape:",
-      `{
-  "matchAnalysis": {
-    "classification": "strong" | "partial" | "gaps",
-    "jobTitle": string | null,
-    "company": string | null,
-    "confirmedStrengths": string[],
-    "partialMatches": string[],
-    "missingOrUnconfirmed": string[],
-    "germanMarketNotes": string[],
-    "clarificationQuestions": string[]
-  },
-  "cv": string,
-  "coverLetter": string,
-  "detectedJobAdLanguage": "de" | "en"
-}`,
-      "",
-      "=== USER EXPERIENCE ===",
-      input.experience,
-      "",
-      "=== JOB ADVERTISEMENT ===",
-      input.jobAd,
-    ].join("\n");
-
-    const raw = await this.callModelForText(system, user, 4096);
-    const parsed = extractJsonObject(raw) as any;
-
-    return {
-      matchAnalysis: {
-        classification: coerceClassification(parsed?.matchAnalysis?.classification),
-        jobTitle: strOrNull(parsed?.matchAnalysis?.jobTitle),
-        company: strOrNull(parsed?.matchAnalysis?.company),
-        confirmedStrengths: strArray(parsed?.matchAnalysis?.confirmedStrengths),
-        partialMatches: strArray(parsed?.matchAnalysis?.partialMatches),
-        missingOrUnconfirmed: strArray(parsed?.matchAnalysis?.missingOrUnconfirmed),
-        germanMarketNotes: strArray(parsed?.matchAnalysis?.germanMarketNotes),
-        clarificationQuestions: strArray(parsed?.matchAnalysis?.clarificationQuestions),
-      },
-      cv: typeof parsed?.cv === "string" ? parsed.cv : "",
-      coverLetter: typeof parsed?.coverLetter === "string" ? parsed.coverLetter : "",
-      meta: {
-        provider: this.name,
-        outputLanguage: input.outputLanguage,
-        detectedJobAdLanguage: coerceJobAdLanguage(parsed?.detectedJobAdLanguage),
-      },
-    };
+    return runPipeline(this, input);
   }
 
   /** Single Messages API round-trip that returns concatenated text blocks. */
@@ -151,20 +104,11 @@ export class ClaudeProvider implements AIProvider {
   }
 }
 
-// --- tolerant coercion helpers (model output is untrusted structurally) ------
-
-function coerceClassification(v: unknown): MatchClassification {
-  return v === "strong" || v === "partial" || v === "gaps" ? v : "partial";
-}
-
-function coerceJobAdLanguage(v: unknown): JobAdLanguage {
-  return v === "de" || v === "en" ? v : "unknown";
-}
-
-function strOrNull(v: unknown): string | null {
-  return typeof v === "string" && v.trim() ? v : null;
-}
-
-function strArray(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+function schemaError(
+  stage: string,
+  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+): string {
+  return `Claude ${stage} returned an invalid shape: ${issues
+    .map((i) => `${i.path.map(String).join(".")}: ${i.message}`)
+    .join("; ")}`;
 }

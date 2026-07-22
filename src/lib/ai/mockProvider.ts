@@ -6,7 +6,8 @@ import type {
   GenerationResult,
   JobAdLanguage,
 } from "./types";
-import type { SourceOfTruth } from "@/lib/schemas";
+import type { ParsedJobAd, SourceOfTruth } from "@/lib/schemas";
+import { runPipeline } from "./orchestrator";
 
 /**
  * Deterministic mock provider used for Day 1 and for local development without
@@ -109,60 +110,25 @@ export class MockProvider implements AIProvider {
     };
   }
 
+  /**
+   * Deterministic Stage 5 cover letter, built ONLY from the Source of Truth.
+   * The recipient is never invented: when unknown it is marked with a bracketed
+   * placeholder, per the Germany Market Pack.
+   */
+  async writeCoverLetter(
+    input: GenerationInput,
+    extraction: ExtractionResult,
+  ): Promise<string> {
+    return renderMockCoverLetter(
+      extraction.sourceOfTruth,
+      extraction.parsedJobAd,
+      input.outputLanguage === "de",
+    );
+  }
+
+  /** Full pipeline via the shared orchestrator (extract -> analyse+CV -> letter). */
   async generate(input: GenerationInput): Promise<GenerationResult> {
-    const detectedJobAdLanguage = detectJobAdLanguage(input.jobAd);
-    const de = input.outputLanguage === "de";
-
-    const excerpt = firstLine(input.experience) || "(no experience provided)";
-    const jobExcerpt = firstLine(input.jobAd) || "(no job advertisement provided)";
-
-    return {
-      matchAnalysis: {
-        classification: "partial",
-        jobTitle: null,
-        company: null,
-        confirmedStrengths: [
-          de
-            ? "Platzhalter: bestätigte Stärke aus der Erfahrung des Nutzers."
-            : "Placeholder: a confirmed strength drawn from the user's experience.",
-        ],
-        partialMatches: [
-          de ? "Platzhalter: teilweise Übereinstimmung." : "Placeholder: a partial match.",
-        ],
-        missingOrUnconfirmed: [
-          de
-            ? "Platzhalter: fehlende oder unbestätigte Anforderung."
-            : "Placeholder: a missing or unconfirmed requirement.",
-        ],
-        germanMarketNotes: [
-          de
-            ? "Platzhalter: Hinweis zur Anpassung an den deutschen Arbeitsmarkt."
-            : "Placeholder: a note about adaptation to the German job market.",
-        ],
-        clarificationQuestions: [
-          de
-            ? "Bitte bestätigen oder ergänzen Sie diese Information."
-            : "Please confirm or provide this information.",
-        ],
-      },
-      cv: [
-        `[MOCK ${de ? "LEBENSLAUF" : "CV"} — Day 1 vertical slice]`,
-        "",
-        de ? "Erfahrung (Auszug):" : "Experience (excerpt):",
-        `  ${excerpt}`,
-      ].join("\n"),
-      coverLetter: [
-        `[MOCK ${de ? "ANSCHREIBEN" : "COVER LETTER"} — Day 1 vertical slice]`,
-        "",
-        de ? "Stelle (Auszug):" : "Position (excerpt):",
-        `  ${jobExcerpt}`,
-      ].join("\n"),
-      meta: {
-        provider: this.name,
-        outputLanguage: input.outputLanguage,
-        detectedJobAdLanguage,
-      },
-    };
+    return runPipeline(this, input);
   }
 }
 
@@ -232,6 +198,53 @@ function renderMockCv(sot: SourceOfTruth, de: boolean): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Render a plain-text cover letter from the Source of Truth ONLY. Connects the
+ * first confirmed role to the job title; never invents a recipient or company
+ * knowledge. Missing details are shown as bracketed placeholders.
+ */
+function renderMockCoverLetter(sot: SourceOfTruth, job: ParsedJobAd, de: boolean): string {
+  const role = job.jobTitle ?? (de ? "die ausgeschriebene Stelle" : "the advertised role");
+  const company = job.company ?? (de ? "[Unternehmen nicht angegeben]" : "[company not provided]");
+  const firstRole = sot.workExperience[0]?.title;
+  const name = sot.personalInfo.name ?? (de ? "[Name nicht angegeben]" : "[name not provided]");
+  const recipient = de ? "[Empfänger nicht angegeben]" : "[recipient not provided]";
+
+  if (de) {
+    return [
+      "[MOCK ANSCHREIBEN — DE]",
+      "",
+      recipient,
+      "",
+      "Sehr geehrte Damen und Herren,",
+      "",
+      `hiermit bewerbe ich mich auf ${role} bei ${company}.`,
+      firstRole
+        ? `Meine bisherige Tätigkeit als ${firstRole} ist für diese Position relevant.`
+        : "[Bitte bestätigen oder ergänzen Sie Ihre relevante Erfahrung.]",
+      "",
+      "Mit freundlichen Grüßen",
+      name,
+    ].join("\n");
+  }
+
+  return [
+    "[MOCK COVER LETTER — EN]",
+    "",
+    recipient,
+    "",
+    "Dear Hiring Team,",
+    "",
+    `I am writing to apply for ${role} at ${company}.`,
+    firstRole
+      ? `My experience as ${firstRole} is relevant to this position.`
+      : "[Please confirm or provide your relevant experience.]",
+    "",
+    "Kind regards,",
+    name,
+  ].join("\n");
 }
 
 /** First non-empty line of a block of text, trimmed and length-capped. */
